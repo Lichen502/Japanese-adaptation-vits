@@ -1,0 +1,82 @@
+{
+  "name": "koishi-plugin-minimax-vits",
+  "description": "自用，使用 minimax 国际版生成语音，不注册chatluna只截取chatluna输出LLM。",
+  "version": "1.6.4",
+  "main": "lib/index.js",
+  "module": "esm/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./esm/index.js",
+      "require": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "esm",
+    "readme.md"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "chatbot",
+    "koishi",
+    "plugin",
+    "minimax",
+    "tts",
+    "vits",
+    "chatluna",
+    "voice",
+    "speech"
+  ],
+  "peerDependencies": {
+    "@koishijs/plugin-console": "^5.16.0",
+    "koishi": "^4.18.10"
+  },
+  "dependencies": {
+    "form-data": "^4.0.0"
+  },
+  "devDependencies": {
+    "@koishijs/client": "^5.16.0",
+    "@types/form-data": "^2.5.0",
+    "@types/node": "^20.0.0",
+    "tsc-alias": "^1.8.0",
+    "typescript": "^5.0.0",
+    "vue": "^3.3.0"
+  },
+  "scripts": {
+    "build": "tsc && tsc-alias -p tsconfig.json && tsc -p tsconfig.esm.json && tsc-alias -p tsconfig.esm.json",
+    "build:dev": "tsc --watch",
+    "clean": "rm -rf lib",
+    "prepublishOnly": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "inject": {
+    "optional": [
+      "console",
+      "chatluna"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yushangjianghe-cell/minimax-vits.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yushangjianghe-cell/minimax-vits/issues"
+  },
+  "homepage": "https://github.com/yushangjianghe-cell/minimax-vits#readme",
+  "koishi": {
+    "description": {
+      "en": "MiniMax VITS TTS plugin",
+      "zh": "自用插件。MiniMax VITS TTS插件"
+    },
+    "service": {
+      "implements": [
+        "minimax-vits"
+      ]
+    }
+  }
+}
