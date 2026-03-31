@@ -1,4 +1,7 @@
 // 工具函数
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { h } from 'koishi';
 /**
  * 模糊查询关键词
@@ -59,10 +62,51 @@ export function extractDialogueContent(text) {
     return null;
 }
 /**
- * 构建音频消息元素
+ * 判断是否为 weixin/openclaw 平台
+ */
+export function isWeixinLikePlatform(platform) {
+    if (!platform)
+        return false;
+    const lower = String(platform).toLowerCase();
+    return lower.includes('weixin') || lower.includes('openclaw');
+}
+/**
+ * 构建音频消息元素（data-uri）
  */
 export function makeAudioElement(buffer, format) {
     const mimeType = format === 'wav' ? 'audio/wav' : 'audio/mpeg';
     const src = `data:${mimeType};base64,${buffer.toString('base64')}`;
     return h('audio', { src });
+}
+/**
+ * 将音频写入临时文件，返回绝对路径
+ */
+export async function writeTempAudioFile(buffer, format) {
+    const ext = format === 'wav' ? 'wav' : 'mp3';
+    const dir = path.resolve('./data/minimax-vits/outbound');
+    await fs.mkdir(dir, { recursive: true });
+    const fileName = `tts-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+    const filePath = path.join(dir, fileName);
+    await fs.writeFile(filePath, buffer);
+    return filePath;
+}
+/**
+ * 构建 weixin 兼容文件消息元素（走 file:// URL）
+ */
+export function makeWeixinFileElement(filePath) {
+    const fileUrl = pathToFileURL(path.resolve(filePath)).href;
+    return h.file(fileUrl);
+}
+/**
+ * 删除临时文件（忽略异常）
+ */
+export async function removeTempFile(filePath) {
+    if (!filePath)
+        return;
+    try {
+        await fs.unlink(filePath);
+    }
+    catch {
+        // ignore
+    }
 }

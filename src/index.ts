@@ -5,7 +5,13 @@ import type { Config as ConfigType } from './types'
 import { AudioCacheManager } from './cache'
 import { MinimaxVitsService } from './service'
 import { generateSpeech, uploadFile } from './api'
-import { makeAudioElement } from './utils'
+import {
+  isWeixinLikePlatform,
+  makeAudioElement,
+  makeWeixinFileElement,
+  removeTempFile,
+  writeTempAudioFile,
+} from './utils'
 import { selectSpeechSentenceByAI } from './tool'
 
 export const name = 'minimax-vits'
@@ -345,22 +351,41 @@ export function apply(ctx: Context, config: ConfigType) {
         if (validBuffers.length === 0) return
 
         const finalBuffer = Buffer.concat(validBuffers)
-        const audioElem = makeAudioElement(finalBuffer, config.audioFormat ?? 'mp3')
+        const sendMode = config.autoSpeech?.sendMode ?? 'text_and_voice'
+        const isWeixin = isWeixinLikePlatform(session?.platform)
 
-        switch (config.autoSpeech.sendMode) {
-          case 'voice_only':
+        if (isWeixin) {
+          const tempAudioPath = await writeTempAudioFile(finalBuffer, config.audioFormat ?? 'mp3')
+          const fileElem = makeWeixinFileElement(tempAudioPath)
+
+          try {
+            if (sendMode === 'voice_only') {
+              await session.send(fileElem)
+            } else if (sendMode === 'mixed') {
+              await session.send(targetText)
+              await session.send(fileElem)
+            } else {
+              // text_and_voice
+              await session.send(fileElem)
+              await session.send(targetText)
+            }
+          } finally {
+            setTimeout(() => {
+              void removeTempFile(tempAudioPath)
+            }, 60_000)
+          }
+        } else {
+          const audioElem = makeAudioElement(finalBuffer, config.audioFormat ?? 'mp3')
+          if (sendMode === 'voice_only') {
             await session.send(audioElem)
-            break
-          case 'mixed':
-            await session.send(aiText + audioElem)
-            break
-          case 'text_and_voice':
-          default:
+          } else if (sendMode === 'mixed') {
+            await session.send(targetText + audioElem)
+          } else {
             await session.send(audioElem)
-            break
+          }
         }
 
-        if (config.debug) logger.info('语音已发送')
+        if (config.debug) logger.info(`语音已发送 (platform=${session?.platform || 'unknown'})`)
       } catch (err) {
         logger.error('语音转换出错:', err)
       }
@@ -429,7 +454,18 @@ export function apply(ctx: Context, config: ConfigType) {
       )
       
       if (!buffer) return '失败'
-      return makeAudioElement(buffer, config.audioFormat ?? 'mp3')
+
+      const isWeixin = isWeixinLikePlatform(session?.platform)
+      if (!isWeixin) {
+        return makeAudioElement(buffer, config.audioFormat ?? 'mp3')
+      }
+
+      const tempAudioPath = await writeTempAudioFile(buffer, config.audioFormat ?? 'mp3')
+      setTimeout(() => {
+        void removeTempFile(tempAudioPath)
+      }, 60_000)
+
+      return makeWeixinFileElement(tempAudioPath)
     })
 }
 
