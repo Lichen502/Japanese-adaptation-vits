@@ -5,6 +5,7 @@ import type { Config as ConfigType } from './types'
 import { AudioCacheManager } from './cache'
 import { MinimaxVitsService } from './service'
 import { generateSpeech, uploadFile } from './api'
+<<<<<<< HEAD
 import {
   isWeixinLikePlatform,
   makeAudioElement,
@@ -13,6 +14,9 @@ import {
   removeTempFile,
   writeTempAudioFile,
 } from './utils'
+=======
+import { makeAudioElement } from './utils'
+>>>>>>> 807c98b6fecb90c3c72d94e229173aea2af7a0c3
 import { selectSpeechSentenceByAI } from './tool'
 
 export const name = 'minimax-vits'
@@ -352,6 +356,7 @@ export function apply(ctx: Context, config: ConfigType) {
         if (validBuffers.length === 0) return
 
         const finalBuffer = Buffer.concat(validBuffers)
+<<<<<<< HEAD
         const sendMode = config.autoSpeech?.sendMode ?? 'text_and_voice'
         const isWeixin = isWeixinLikePlatform(session?.platform)
 
@@ -387,6 +392,21 @@ export function apply(ctx: Context, config: ConfigType) {
         }
 
         if (config.debug) logger.info(`语音已发送 (platform=${session?.platform || 'unknown'})`)
+=======
+        const audioElem = makeAudioElement(finalBuffer, config.audioFormat ?? 'mp3')
+
+        const sendMode = config.autoSpeech?.sendMode ?? 'text_and_voice'
+        
+        if (sendMode === 'voice_only') {
+          await session.send(audioElem)
+        } else if (sendMode === 'mixed') {
+          await session.send(targetText + audioElem)
+        } else {
+          await session.send(audioElem)
+        }
+
+        if (config.debug) logger.info('语音已发送')
+>>>>>>> 807c98b6fecb90c3c72d94e229173aea2af7a0c3
       } catch (err) {
         logger.error('语音转换出错:', err)
       }
@@ -455,6 +475,7 @@ export function apply(ctx: Context, config: ConfigType) {
       )
       
       if (!buffer) return '失败'
+<<<<<<< HEAD
 
       const isWeixin = isWeixinLikePlatform(session?.platform)
       if (!isWeixin) {
@@ -467,6 +488,9 @@ export function apply(ctx: Context, config: ConfigType) {
       }, 60_000)
 
       return makeWeixinAudioElement(tempAudioPath)
+=======
+      return makeAudioElement(buffer, config.audioFormat ?? 'mp3')
+>>>>>>> 807c98b6fecb90c3c72d94e229173aea2af7a0c3
     })
 }
 

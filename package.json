@@ -1,7 +1,11 @@
 {
   "name": "koishi-plugin-minimax-vits",
   "description": "自用，使用 minimax 国际版生成语音，不注册chatluna只截取chatluna输出LLM。",
+<<<<<<< HEAD
   "version": "1.7.1",
+=======
+  "version": "1.6.4",
+>>>>>>> 807c98b6fecb90c3c72d94e229173aea2af7a0c3
   "main": "lib/index.js",
   "module": "esm/index.js",
   "types": "lib/index.d.ts",

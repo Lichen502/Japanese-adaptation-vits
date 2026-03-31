@@ -1,7 +1,10 @@
 // 工具函数
+<<<<<<< HEAD
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+=======
+>>>>>>> 807c98b6fecb90c3c72d94e229173aea2af7a0c3
 import { h } from 'koishi'
 
 /**
@@ -71,6 +74,7 @@ export function extractDialogueContent(text: string): string | null {
 }
 
 /**
+<<<<<<< HEAD
  * 判断是否为 weixin/openclaw 平台
  */
 export function isWeixinLikePlatform(platform?: string): boolean {
@@ -81,6 +85,9 @@ export function isWeixinLikePlatform(platform?: string): boolean {
 
 /**
  * 构建音频消息元素（data-uri）
+=======
+ * 构建音频消息元素
+>>>>>>> 807c98b6fecb90c3c72d94e229173aea2af7a0c3
  */
 export function makeAudioElement(buffer: Buffer, format: string) {
   const mimeType = format === 'wav' ? 'audio/wav' : 'audio/mpeg'
@@ -88,6 +95,7 @@ export function makeAudioElement(buffer: Buffer, format: string) {
   return h('audio', { src })
 }
 
+<<<<<<< HEAD
 /**
  * 将音频写入临时文件，返回绝对路径
  */
@@ -128,3 +136,6 @@ export async function removeTempFile(filePath?: string): Promise<void> {
     // ignore
   }
 }
+=======
+
+>>>>>>> 807c98b6fecb90c3c72d94e229173aea2af7a0c3
