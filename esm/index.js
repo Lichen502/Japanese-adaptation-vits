@@ -4,7 +4,7 @@ import { Schema } from 'koishi';
 import { AudioCacheManager } from './cache';
 import { MinimaxVitsService } from './service';
 import { generateSpeech } from './api';
-import { isWeixinLikePlatform, makeAudioElement, makeWeixinFileElement, removeTempFile, writeTempAudioFile, } from './utils';
+import { isWeixinLikePlatform, makeAudioElement, makeWeixinAudioElement, removeTempFile, writeTempAudioFile, } from './utils';
 import { selectSpeechSentenceByAI } from './tool';
 export const name = 'minimax-vits';
 // ==========================================
@@ -309,18 +309,18 @@ export function apply(ctx, config) {
                 const isWeixin = isWeixinLikePlatform(session === null || session === void 0 ? void 0 : session.platform);
                 if (isWeixin) {
                     const tempAudioPath = await writeTempAudioFile(finalBuffer, (_f = config.audioFormat) !== null && _f !== void 0 ? _f : 'mp3');
-                    const fileElem = makeWeixinFileElement(tempAudioPath);
+                    const audioElem = makeWeixinAudioElement(tempAudioPath);
                     try {
                         if (sendMode === 'voice_only') {
-                            await session.send(fileElem);
+                            await session.send(audioElem);
                         }
                         else if (sendMode === 'mixed') {
                             await session.send(targetText);
-                            await session.send(fileElem);
+                            await session.send(audioElem);
                         }
                         else {
                             // text_and_voice
-                            await session.send(fileElem);
+                            await session.send(audioElem);
                             await session.send(targetText);
                         }
                     }
@@ -415,7 +415,7 @@ export function apply(ctx, config) {
         setTimeout(() => {
             void removeTempFile(tempAudioPath);
         }, 60000);
-        return makeWeixinFileElement(tempAudioPath);
+        return makeWeixinAudioElement(tempAudioPath);
     });
 }
 export default {

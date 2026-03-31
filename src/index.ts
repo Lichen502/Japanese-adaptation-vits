@@ -8,6 +8,7 @@ import { generateSpeech, uploadFile } from './api'
 import {
   isWeixinLikePlatform,
   makeAudioElement,
+  makeWeixinAudioElement,
   makeWeixinFileElement,
   removeTempFile,
   writeTempAudioFile,
@@ -356,17 +357,17 @@ export function apply(ctx: Context, config: ConfigType) {
 
         if (isWeixin) {
           const tempAudioPath = await writeTempAudioFile(finalBuffer, config.audioFormat ?? 'mp3')
-          const fileElem = makeWeixinFileElement(tempAudioPath)
+          const audioElem = makeWeixinAudioElement(tempAudioPath)
 
           try {
             if (sendMode === 'voice_only') {
-              await session.send(fileElem)
+              await session.send(audioElem)
             } else if (sendMode === 'mixed') {
               await session.send(targetText)
-              await session.send(fileElem)
+              await session.send(audioElem)
             } else {
               // text_and_voice
-              await session.send(fileElem)
+              await session.send(audioElem)
               await session.send(targetText)
             }
           } finally {
@@ -465,7 +466,7 @@ export function apply(ctx: Context, config: ConfigType) {
         void removeTempFile(tempAudioPath)
       }, 60_000)
 
-      return makeWeixinFileElement(tempAudioPath)
+      return makeWeixinAudioElement(tempAudioPath)
     })
 }
 

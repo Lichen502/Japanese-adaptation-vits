@@ -110,6 +110,14 @@ export function makeWeixinFileElement(filePath: string) {
 }
 
 /**
+ * 构建 weixin 兼容语音消息元素（走 file:// URL）
+ */
+export function makeWeixinAudioElement(filePath: string) {
+  const fileUrl = pathToFileURL(path.resolve(filePath)).href
+  return h('audio', { src: fileUrl })
+}
+
+/**
  * 删除临时文件（忽略异常）
  */
 export async function removeTempFile(filePath?: string): Promise<void> {
