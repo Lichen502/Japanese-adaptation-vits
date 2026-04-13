@@ -15,11 +15,19 @@ export interface Config {
   sampleRate: 16000 | 24000 | 32000 | 44100 | 48000
   bitrate: 64000 | 96000 | 128000 | 192000 | 256000
   outputFormat: 'hex'
-  languageBoost: 'auto' | 'zh' | 'en'
+  languageBoost: 'auto' | 'zh' | 'en'| 'ja'
+  interjections: boolean
+
 
   // 新增：自动语音配置
   autoSpeech: {
     enabled: boolean
+    whitelist?: {
+      groupEnabled: boolean
+      groupList: string[]
+      privateEnabled: boolean
+      privateList: string[]
+    }
     sendMode: 'voice_only' | 'text_and_voice' | 'mixed'
     minLength: number
     selectorMode: 'full' | 'ai_sentence' | 'openai_filter'

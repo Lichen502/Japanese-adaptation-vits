@@ -1,23 +1,9 @@
-# koishi-plugin-minimax-vits
+# koishi-plugin-Japanese-adaptation-vits
+自用插件，基于@唐晓啡老师的minimax-vits 语音合成插件，添加了日语适配、语气词保护、群聊私聊白名单功能
 
-[![npm](https://img.shields.io/npm/v/koishi-plugin-minimax-vits?style=flat-square)](https://www.npmjs.com/package/koishi-plugin-minimax-vits)
 
-使用 MiniMax 国际版 TTS 生成语音，深度适配 ChatLuna（肘击AI版）。自用插件，持续打磨中。
+- **群聊私聊白名单**：开启后会只在指定的用户/群组内发送语音
 
-## 特性
-
-- **ChatLuna 深度集成**：监听 ChatLuna 对话事件，AI 回复自动转语音发送
-- **智能语音筛选**：支持多种策略选择最适合朗读的内容（整条/AI挑选/OpenAI筛选）
-- **音频缓存**：自动缓存已生成的音频，减少 API 调用
-- **灵活发送模式**：仅语音 / 语音+文本混合 / 分开发送
-
-## 安装
-
-```bash
-npm install koishi-plugin-minimax-vits
-# 或
-yarn add koishi-plugin-minimax-vits
-```
 
 ## 配置
 
@@ -34,12 +20,17 @@ yarn add koishi-plugin-minimax-vits
 | pitch | 音调 | 0 |
 | audioFormat | 音频格式 | mp3 |
 | sampleRate | 采样率 | 32000 |
+| interjections | 是否传语气词给模型(仅限支持语气词的模型) | false |
 
 ### 自动语音转换
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
 | enabled | 启用 ChatLuna 对话自动转语音 | false |
+| groupEnabled | 启用群聊白名单（开启后仅白名单内群聊触发自动转语音） | false |
+| groupList | 群聊白名单列表 | string[] |
+| privateEnabled | 启用私聊白名单 | false |
+| privateList | 私聊白名单列表 | string[] |
 | sendMode | 发送模式：voice_only / text_and_voice / mixed | text_and_voice |
 | minLength | 触发转换的最短字符数 | 2 |
 | selectorMode | 语音内容选择策略 | full |

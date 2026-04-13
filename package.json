@@ -1,7 +1,10 @@
 {
-  "name": "koishi-plugin-minimax-vits",
-  "description": "自用，使用 minimax 国际版生成语音，不注册chatluna只截取chatluna输出LLM。",
-  "version": "1.7.4",
+  "name": "koishi-plugin-japanese-adaptation-vits",
+  "description": "自用，使用 minimax 生成语音，添加白名单机制、保留语气词",
+  "version": "1.0.0",
+  "contributors": [
+    "唐晓啡 <630320467@qq.com>"
+  ],
   "main": "lib/index.js",
   "module": "esm/index.js",
   "types": "lib/index.d.ts",
@@ -28,7 +31,8 @@
     "vits",
     "chatluna",
     "voice",
-    "speech"
+    "speech",
+    "Japanese"
   ],
   "peerDependencies": {
     "@koishijs/plugin-console": "^5.16.0",
@@ -62,20 +66,20 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yushangjianghe-cell/minimax-vits.git"
+    "url": "git+https://github.com/Lichen502/Japanese-adaptation-vits.git"
   },
   "bugs": {
-    "url": "https://github.com/yushangjianghe-cell/minimax-vits/issues"
+    "url": "https://github.com/Lichen502/Japanese-adaptation-vits/issues"
   },
-  "homepage": "https://github.com/yushangjianghe-cell/minimax-vits#readme",
+  "homepage": "https://github.com/Lichen502/Japanese-adaptation-vits#readme",
   "koishi": {
     "description": {
-      "en": "MiniMax VITS TTS plugin",
-      "zh": "自用插件。MiniMax VITS TTS插件"
+      "en": "japanese-adaptation-vits",
+      "zh": "自用插件。japanese-adaptation-vits插件"
     },
     "service": {
       "implements": [
-        "minimax-vits"
+        "japanese-adaptation-vits"
       ]
     }
   }
