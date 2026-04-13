@@ -6,7 +6,7 @@ import { MinimaxVitsService } from './service';
 import { generateSpeech } from './api';
 import { isWeixinLikePlatform, makeAudioElement, makeWeixinAudioElement, removeTempFile, writeTempAudioFile, } from './utils';
 import { selectSpeechSentenceByAI } from './tool';
-export const name = 'Japanese-adaptation-vits';
+export const name = 'japanese-adaptation-vits';
 // ==========================================
 // 模块 A: 文本清洗 (过滤非对话内容)
 // ==========================================
