@@ -1,5 +1,5 @@
 {
-  "name": "koishi-plugin-Japanese-adaptation-vits",
+  "name": "koishi-plugin-japanese-adaptation-vits",
   "description": "自用，使用 minimax 生成语音，添加白名单机制、保留语气词",
   "version": "1.0.0",
   "contributors": [
@@ -32,7 +32,7 @@
     "chatluna",
     "voice",
     "speech",
-    "Japanese"
+    "japanese"
   ],
   "peerDependencies": {
     "@koishijs/plugin-console": "^5.16.0",
@@ -64,7 +64,7 @@
       "chatluna"
     ]
   },
-  "homepage": "https://github.com/Lichen502/Japanese-adaptation-vits#readme",
+  "homepage": "https://github.com/Lichen502/japanese-adaptation-vits#readme",
   "koishi": {
     "description": {
       "en": "japanese-adaptation-vits",
