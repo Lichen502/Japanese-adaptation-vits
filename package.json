@@ -67,12 +67,12 @@
   "homepage": "https://github.com/Lichen502/japanese-adaptation-vits#readme",
   "koishi": {
     "description": {
-      "en": "japanese-adaptation-vits",
-      "zh": "自用插件。japanese-adaptation-vits插件"
+      "en": "japanese-adaptation-yhy-selfuse-vits",
+      "zh": "自用插件。japanese-adaptation-yhy-selfuse-vits插件"
     },
     "service": {
       "implements": [
-        "japanese-adaptation-vits"
+        "japanese-adaptation-yhy-selfuse-vits"
       ]
     }
   }
