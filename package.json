@@ -64,13 +64,6 @@
       "chatluna"
     ]
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Lichen502/Japanese-adaptation-vits.git"
-  },
-  "bugs": {
-    "url": "https://github.com/Lichen502/Japanese-adaptation-vits/issues"
-  },
   "homepage": "https://github.com/Lichen502/Japanese-adaptation-vits#readme",
   "koishi": {
     "description": {
