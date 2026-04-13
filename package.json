@@ -1,5 +1,5 @@
 {
-  "name": "koishi-plugin-japanese-adaptation-vits",
+  "name": "koishi-plugin-Japanese-adaptation-vits",
   "description": "自用，使用 minimax 生成语音，添加白名单机制、保留语气词",
   "version": "1.0.0",
   "contributors": [
