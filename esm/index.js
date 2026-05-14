@@ -186,17 +186,14 @@ export const schema = Schema.object({
         Schema.const('en').description('英文'), Schema.const('ja').description('日文')
     ]).default('auto').description('语言增强'),
     interjections: Schema.boolean().default(false).description('是否传语气词给模型(仅限支持语气词的模型)'),
-    // 新增：自动转语音相关配置
     autoSpeech: Schema.object({
         enabled: Schema.boolean().default(false).description('启用 ChatLuna 对话自动转语音'),
-        // === 新增：白名单配置 ===
         whitelist: Schema.object({
             groupEnabled: Schema.boolean().default(false).description('启用群聊白名单（开启后仅白名单内群聊触发自动转语音）'),
             groupList: Schema.array(String).role('table').default([]).description('群聊白名单列表 (填写群号)'),
             privateEnabled: Schema.boolean().default(false).description('启用私聊白名单（开启后仅白名单内用户触发自动转语音）'),
             privateList: Schema.array(String).role('table').default([]).description('私聊白名单列表 (填写用户Id)'),
         }).description('黑白名单机制（关闭则对所有人生效）'),
-        // ========================
         sendMode: Schema.union([
             Schema.const('voice_only').description('仅发送语音'),
             Schema.const('text_and_voice').description('发送语音+文本(分两条)'),
@@ -255,29 +252,46 @@ export function apply(ctx, config) {
             try {
                 if (!session.content)
                     return;
-                // 1. 防止死循环：如果已经是语音/音频消息，直接放行
+                // 防止死循环：如果已经是语音/音频消息，直接放行
                 if (session.content.includes('<audio') || session.content.includes('[CQ:record')) {
                     return;
                 }
-                // 2. 过滤条件：如果配置了只拦截特定机器人 (使用 as any 防止未在 Schema 中定义时报错)
+                // =======================================================
+                // 新增预处理：提前处理用户可见内容（过滤语气词）
+                // 这样即使后续因为条件判断被 `return` 跳过了语音生成，发送的纯文本也不带标签
+                // =======================================================
+                const elements = session.elements || h.parse(session.content);
+                const audioTagsRegex = /[(（]\s*(laughs|chuckle|coughs|clear-throat|groans|breath|pant|inhale|exhale|gasps|sniffs|sighs|snorts|burps|lip-smacking|humming|hissing|emm|whistles|sneezes|crying|applause)\s*[)）]/gi;
+                const userVisibleElements = h.transform(elements, {
+                    text: (attrs) => {
+                        const cleaned = attrs.content.replace(audioTagsRegex, '');
+                        return h.text(cleaned);
+                    },
+                });
+                // 核心改动：如果开启了过滤语气词，提前把清洗后的文本覆盖到 session 中。
+                if (config.interjections) {
+                    session.elements = userVisibleElements;
+                    session.content = userVisibleElements.join('');
+                }
+                // 提取供 TTS 朗读的纯文本 (注意：务必从【原始】的 elements 中提取，保留语气词给大模型)
+                const rawTextForTTS = elements
+                    .map(el => el.type === 'text' ? el.attrs.content : '')
+                    .join(' ');
+                // =======================================================
+                // 过滤条件：如果配置了只拦截特定机器人 
                 const autoSpeechConf = config.autoSpeech;
                 if (autoSpeechConf.onlyChatLuna && autoSpeechConf.chatLunaBotId) {
                     if (session.bot.selfId !== autoSpeechConf.chatLunaBotId)
                         return;
                 }
-                // === 3. 白名单拦截逻辑 ===
+                // === 白名单拦截逻辑 ===
                 if ((_a = config.autoSpeech) === null || _a === void 0 ? void 0 : _a.whitelist) {
                     const whitelistConfig = config.autoSpeech.whitelist;
                     const isDirect = session.isDirect || !session.guildId; // 判断是否私聊
                     const targetUserId = session.userId || session.channelId || '';
                     const targetGroupId = session.guildId || session.channelId || '';
-                    //  logger.info(`[白名单检查] 模式: ${isDirect ? '私聊' : '群聊'}, 获取到的目标ID: ${isDirect ? targetUserId : targetGroupId}`);
-                    //   logger.info(`[白名单配置] 私聊启用: ${whitelistConfig.privateEnabled}, 允许的列表: [${whitelistConfig.privateList?.join(', ') || ''}]`);
-                    //   logger.info(`[白名单配置] 群聊启用: ${whitelistConfig.groupEnabled}, 允许的列表: [${whitelistConfig.groupList?.join(', ') || ''}]`);
-                    //   logger.info('信息:', session)
                     if (isDirect) {
                         // 私聊拦截检查
-                        // 使用 .some 和 .includes 是为了兼容某些平台 channelId 为 'private:123456' 的情况
                         const isUserInWhitelist = whitelistConfig.privateList.some(id => targetUserId.includes(id));
                         if (whitelistConfig.privateEnabled && !isUserInWhitelist) {
                             if (config.debug)
@@ -296,23 +310,17 @@ export function apply(ctx, config) {
                     }
                 }
                 // ============================
-                // 4. 解析消息为元素数组
-                const elements = session.elements || h.parse(session.content);
-                // 5. 提取纯文本给 TTS (只取 text 节点，忽略图片等)
-                const rawTextForTTS = elements
-                    .map(el => el.type === 'text' ? el.attrs.content : '')
-                    .join(' ');
                 // 使用清理函数提取 TTS 文本
                 const cleanedTextObj = cleanModelOutput(rawTextForTTS, config.interjections);
                 const aiText = cleanedTextObj.ttsText;
-                // 如果清洗后没东西了，就不转语音
+                // 如果清洗后没东西了，或短于设定值，则不转语音
                 if (!aiText || aiText.length < ((_b = config.autoSpeech.minLength) !== null && _b !== void 0 ? _b : 2)) {
                     return;
                 }
                 if (config.debug)
                     logger.info(`准备转换对话文本: ${aiText.slice(0, 30)}...`);
                 // ==================================
-                // AI 筛选句子逻辑 (根据 selectorMode 决定内容)
+                // AI 筛选句子逻辑
                 // ==================================
                 let targetText = aiText;
                 if (config.autoSpeech.selectorMode === 'ai_sentence') {
@@ -359,17 +367,6 @@ export function apply(ctx, config) {
                     audioElem = makeAudioElement(finalBuffer, (_f = config.audioFormat) !== null && _f !== void 0 ? _f : 'mp3');
                 }
                 // ===============================
-                // 处理用户可见的消息内容 (保护图片，移除语气词)
-                // ===============================
-                const audioTagsRegex = /[(（]\s*(laughs|chuckle|coughs|clear-throat|groans|breath|pant|inhale|exhale|gasps|sniffs|sighs|snorts|burps|lip-smacking|humming|hissing|emm|whistles|sneezes|crying|applause)\s*[)）]/gi;
-                // 转换元素：移除语气词，同时清理文本节点边缘的空白
-                const userVisibleElements = h.transform(elements, {
-                    text: (attrs) => {
-                        const cleaned = attrs.content.replace(audioTagsRegex, '');
-                        return h.text(cleaned);
-                    },
-                });
-                // ===============================
                 // 核心发送逻辑修改 (根据 sendMode 更新 session)
                 // ===============================
                 switch (config.autoSpeech.sendMode) {
@@ -389,7 +386,7 @@ export function apply(ctx, config) {
                         if (session.channelId) {
                             await session.bot.sendMessage(session.channelId, audioElem, session.guildId);
                         }
-                        // 然后让 session 携带原来的 文本+图片 继续发送本条消息
+                        // 然后让 session 携带原来的 文本+图片 继续发送本条消息 (因为我们在顶部已经赋值过了，所以使用 userVisibleElements 也是干净的)
                         session.elements = userVisibleElements;
                         session.content = userVisibleElements.join('');
                         break;
@@ -417,15 +414,6 @@ export function apply(ctx, config) {
             }
             else {
                 state.minimaxVitsService = new MinimaxVitsService(ctxWithConsole, config);
-                // state.minimaxVitsService = new MinimaxVitsService(ctxWithConsole, config);
-                // if (ctxWithConsole.console) {
-                //   if (typeof ctxWithConsole.console.addService === 'function') {
-                //     ctxWithConsole.console.addService(name, state.minimaxVitsService);
-                //   } else {
-                //     ctxWithConsole.console.services = ctxWithConsole.console.services || {};
-                //     ctxWithConsole.console.services[name] = state.minimaxVitsService;
-                //   }
-                // }
             }
         }
         catch (error) {
