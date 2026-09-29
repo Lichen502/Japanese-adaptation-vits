@@ -1,22 +1,33 @@
 // src/types.ts
 export interface Config {
-  // 基础配置
-  ttsApiKey: string
-  groupId: string
-  apiBase: string
-  defaultVoice: string
-  speechModel: string
+   provider?: 'minimax' | 'elevenlabs';
   
-  // 音频参数
-  speed: number
-  vol: number
-  pitch: number
-  audioFormat: 'mp3' | 'wav'
-  sampleRate: 16000 | 24000 | 32000 | 44100 | 48000
-  bitrate: 64000 | 96000 | 128000 | 192000 | 256000
-  outputFormat: 'hex'
-  languageBoost: 'auto' | 'zh' | 'en'| 'ja'
-  interjections: boolean
+  // === MiniMax ===
+  ttsApiKey?: string;
+  groupId?: string;
+  apiBase?: string;
+  defaultVoice?: string;
+  speechModel?: string;
+  speed?: number;
+  vol?: number;
+  pitch?: number;
+  audioFormat?: 'mp3' | 'wav';
+  sampleRate?: number;
+  bitrate?: number;
+  outputFormat?: 'hex';
+  languageBoost?: 'auto' | 'zh' | 'en' | 'ja';
+  interjections?: boolean;
+
+  // === ElevenLabs ===
+  elevenlabsApiKey?: string;
+  elevenlabsApiBase?: string;
+  elevenlabsVoiceId?: string;
+  elevenlabsModelId?: string;
+  elevenlabsStability?: number;
+  elevenlabsSimilarityBoost?: number;
+  elevenlabsStyle?: number;
+  elevenlabsUseSpeakerBoost?: boolean;
+  elevenlabsAudioFormat?: 'mp3' | 'pcm';
 
 
   // 新增：自动语音配置

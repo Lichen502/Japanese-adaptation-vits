@@ -1,196 +1,203 @@
 // src/api.ts
-import { Context } from 'koishi'
-import { Config } from './types'
-import { AudioCacheManager } from './cache'
+import { Context } from 'koishi';
+import { AudioCacheManager } from './cache';
 
+/**
+ * 构造缓存查询参数（区分引擎）
+ */
+function getCacheParams(config: any) {
+    if (config.engine === 'elevenlabs') {
+        return {
+            engine: 'elevenlabs',
+            model: config.speechModel,
+            stability: config.stability ?? 0.5,
+            similarityBoost: config.similarityBoost ?? 0.75,
+            style: config.style ?? 0.0,
+            speed: config.speed ?? 1.0,
+            format: config.outputFormat ?? 'mp3_44100_128',
+        };
+    } else {
+        return {
+            engine: 'minimax',
+            model: config.speechModel,
+            speed: config.speed,
+            vol: config.vol,
+            pitch: config.pitch,
+            format: config.audioFormat ?? 'mp3'
+        };
+    }
+}
+
+/**
+ * 核心语音生成函数
+ */
 export async function generateSpeech(
-  ctx: Context,
-  config: Config,
-  text: string,
-  voiceId: string,
-  cacheManager?: AudioCacheManager
+    ctx: Context,
+    config: any,
+    text: string,
+    voiceId: string,
+    cacheManager?: AudioCacheManager
 ): Promise<Buffer | null> {
-  const logger = ctx.logger('minimax-vits')
+    const logger = ctx.logger('tts-service');
+    const engine = config.engine || 'elevenlabs';
 
-  // 强制打印调用信息，便于排查为何无输出或无调用
-  try {
-    logger.info(`generateSpeech called — textLength=${text?.length ?? 0}, voiceId=${voiceId}`)
-  } catch (e) {
-    // ignore
-  }
-
-  // 1. 尝试读取缓存
-  if (cacheManager) {
-    // 构造缓存参数标识
-    const cacheParams = {
-      speed: config.speed,
-      vol: config.vol,
-      pitch: config.pitch,
-      format: config.audioFormat
-    }
-    
-    const cached = await cacheManager.getAudio(text, voiceId, cacheParams)
-    if (cached) {
-      if (config.debug) logger.info('命中本地缓存')
-      return cached
-    }
-  }
-
-  // 2. 调用 API
-  try {
-    if (!config.ttsApiKey) {
-      logger.error('未配置 ttsApiKey')
-      return null
-    }
-
-    const payload: any = {
-      model: config.speechModel,
-      text: text,
-      stream: false, // 必填：非流式响应
-      output_format: 'hex', // 必填：hex 格式输出
-      voice_setting: {
-        voice_id: voiceId,
-        speed: config.speed ?? 1.0,
-        vol: config.vol ?? 1.0,
-        pitch: config.pitch ?? 0
-      },
-      audio_setting: {
-        sample_rate: config.sampleRate ?? 32000,
-        bitrate: config.bitrate ?? 128000,
-        format: config.audioFormat ?? 'mp3',
-        channel: 1
-      }
-    }
-
-    // 仅在配置明确设置时添加 language_boost
-    if (config.languageBoost && config.languageBoost !== 'auto') {
-      payload.language_boost = config.languageBoost
-    }
-
-    if (config.debug) {
-      logger.info(`请求 API: ${config.apiBase}/text_to_speech`)
-    }
-
-    // 显式打印请求负载与头（使用 info 级别以确保可见），便于调试参数缺失问题
     try {
-      logger.info('TTS 请求 payload:', JSON.stringify(payload))
+        logger.info(`generateSpeech 触发 [${engine}] — 文本字数: ${text?.length ?? 0}, voiceId: ${voiceId}`);
     } catch (e) {
-      logger.info('TTS 请求 payload (unserializable)')
+        // ignore
     }
-    logger.info('TTS 请求 headers:', {
-      Authorization: `Bearer ${config.ttsApiKey}`,
-      'Content-Type': 'application/json',
-      'Tts-Group-Id': config.groupId || ''
-    })
 
-    const response = await ctx.http.post(
-      `${config.apiBase}/t2a_v2`,
-      payload,
-      {
-        headers: {
-          'Authorization': `Bearer ${config.ttsApiKey}`,
-          'Content-Type': 'application/json',
-          'Tts-Group-Id': config.groupId || ''
-        },
-        responseType: 'arraybuffer'
-      }
-    )
+    if (!config.ttsApiKey) {
+        logger.error(`未配置 ttsApiKey，无法调用 ${engine} 接口`);
+        return null;
+    }
 
-    // 响应可能是：
-    // 1. 直接的 MP3 二进制 (responseType: arraybuffer)
-    // 2. 或 JSON 响应包含 hex 编码的音频 (当返回类型被解析为 JSON 时)
-    
-    let audioData: Buffer | null = null
-    
-    // 尝试将响应作为 JSON 解析（如果 API 返回了 JSON 格式）
+    // 1. 尝试读取本地缓存
+    const cacheParams = getCacheParams(config);
+    if (cacheManager) {
+        const cached = await cacheManager.getAudio(text, voiceId, cacheParams);
+        if (cached) {
+            if (config.debug) logger.info('命中本地音频缓存');
+            return cached;
+        }
+    }
+
+    // 2. 调用对应服务商 API
     try {
-      const responseBuffer = Buffer.isBuffer(response) ? response : Buffer.from(response)
-      const responseText = responseBuffer.toString('utf8').trim()
-      
-      // 检查是否以 { 或 [ 开头，可能是 JSON
-      if (responseText.startsWith('{') || responseText.startsWith('[')) {
-        const obj = JSON.parse(responseText)
-        
-        // 检查是否是错误响应
-        if (obj.base_resp && obj.base_resp.status_code && obj.base_resp.status_code !== 0) {
-          logger.error('TTS API 错误:', obj.base_resp.status_msg || obj.base_resp.status_code)
-          return null
-        }
-        
-        // 检查是否是成功的 hex 编码音频响应
-        if (obj.data && obj.data.audio && typeof obj.data.audio === 'string') {
-          // 将 hex 字符串转换为 Buffer
-          audioData = Buffer.from(obj.data.audio, 'hex')
-          if (config.debug) {
-            logger.info(`从 JSON hex 响应解析音频，大小: ${audioData.length} 字节`)
-          }
+        let audioBuffer: Buffer | null = null;
+
+        if (engine === 'elevenlabs') {
+            // ==========================================
+            // 分支 1: ElevenLabs 请求逻辑
+            // ==========================================
+            const outputFormat = config.outputFormat || 'mp3_44100_128';
+            let baseUrl = String(config.apiBase || 'https://api.elevenlabs.io/v1').replace(/\/$/, '');
+            const url = `${baseUrl}/text-to-speech/${voiceId}?output_format=${outputFormat}`;
+
+            const payload: any = {
+                text: text, // 已经保留了开放式 [tag]
+                model_id: config.speechModel || 'eleven_multilingual_v2',
+                voice_settings: {
+                    stability: config.stability ?? 0.5,
+                    similarity_boost: config.similarityBoost ?? 0.75,
+                    style: config.style ?? 0.0,
+                    use_speaker_boost: config.useSpeakerBoost ?? true,
+                    speed: config.speed ?? 1.0,
+                }
+            };
+
+            if (config.debug) {
+                logger.info(`[ElevenLabs] 请求 URL: ${url}`);
+                logger.info('[ElevenLabs] 请求 payload:', JSON.stringify(payload));
+            }
+
+            const response: any = await ctx.http.post(url, payload, {
+                headers: {
+                    'xi-api-key': config.ttsApiKey,
+                    'Content-Type': 'application/json',
+                },
+                responseType: 'arraybuffer'
+            });
+
+            const resBuffer = Buffer.isBuffer(response) ? response : Buffer.from(response);
+
+            // 检查 ElevenLabs 报错（报错时通常返回 JSON：{"detail":{"status":"...","message":"..."}}）
+            const strCheck = resBuffer.toString('utf8', 0, Math.min(resBuffer.length, 100)).trim();
+            if (strCheck.startsWith('{')) {
+                try {
+                    const errObj = JSON.parse(resBuffer.toString('utf8'));
+                    logger.error('[ElevenLabs] API 响应错误:', JSON.stringify(errObj.detail || errObj));
+                    return null;
+                } catch (e) {
+                    // 不是合法 json，继续当成音频处理
+                }
+            }
+
+            audioBuffer = resBuffer;
+
         } else {
-          // 其他 JSON 响应格式，记录但不处理
-          logger.warn('意外的 API 响应格式:', JSON.stringify(obj).slice(0, 200))
-          return null
+            // ==========================================
+            // 分支 2: MiniMax 请求逻辑 (保留原逻辑)
+            // ==========================================
+            let baseUrl = String(config.apiBase || 'https://api.minimax.io/v1').replace(/\/$/, '');
+            const url = `${baseUrl}/t2a_v2`;
+
+            const payload: any = {
+                model: config.speechModel || 'speech-01-turbo',
+                text: text,
+                stream: false,
+                output_format: 'hex',
+                voice_setting: {
+                    voice_id: voiceId,
+                    speed: config.speed ?? 1.0,
+                    vol: config.vol ?? 1.0,
+                    pitch: config.pitch ?? 0
+                },
+                audio_setting: {
+                    sample_rate: config.sampleRate ?? 32000,
+                    bitrate: config.bitrate ?? 128000,
+                    format: config.audioFormat ?? 'mp3',
+                    channel: 1
+                }
+            };
+
+            if (config.languageBoost && config.languageBoost !== 'auto') {
+                payload.language_boost = config.languageBoost;
+            }
+
+            const response: any = await ctx.http.post(url, payload, {
+                headers: {
+                    'Authorization': `Bearer ${config.ttsApiKey}`,
+                    'Content-Type': 'application/json',
+                    'Tts-Group-Id': config.groupId || ''
+                },
+                responseType: 'arraybuffer'
+            });
+
+            const resBuffer = Buffer.isBuffer(response) ? response : Buffer.from(response);
+            const responseText = resBuffer.toString('utf8').trim();
+
+            if (responseText.startsWith('{') || responseText.startsWith('[')) {
+                const obj = JSON.parse(responseText);
+                if (obj.base_resp && obj.base_resp.status_code && obj.base_resp.status_code !== 0) {
+                    logger.error('[MiniMax] API 错误:', obj.base_resp.status_msg || obj.base_resp.status_code);
+                    return null;
+                }
+                if (obj.data && obj.data.audio && typeof obj.data.audio === 'string') {
+                    audioBuffer = Buffer.from(obj.data.audio, 'hex');
+                }
+            } else {
+                audioBuffer = resBuffer;
+            }
         }
-      } else {
-        // 直接的二进制数据（MP3）
-        audioData = responseBuffer
+
+        // 3. 校验音频完整性
+        if (!audioBuffer || audioBuffer.length === 0) {
+            logger.error(`[${engine}] 返回的音频数据为空`);
+            return null;
+        }
+
         if (config.debug) {
-          logger.info(`获取二进制音频，大小: ${audioData.length} 字节`)
+            logger.info(`[${engine}] 成功获得音频二进制流，大小: ${audioBuffer.length} 字节`);
         }
-      }
-    } catch (parseError) {
-      // 不是 JSON，当作二进制数据处理
-      const responseBuffer = Buffer.isBuffer(response) ? response : Buffer.from(response)
-      audioData = responseBuffer
-      if (config.debug) {
-        logger.info(`音频数据处理为二进制，大小: ${audioData.length} 字节`)
-      }
-    }
-    
-    if (!audioData || audioData.length === 0) {
-      logger.error('无效的音频数据')
-      return null
-    }
-    
-    const audioBuffer = audioData
 
-    // 3. 写入缓存
-    if (cacheManager && audioBuffer.length > 0) {
-       const cacheParams = {
-        speed: config.speed,
-        vol: config.vol,
-        pitch: config.pitch,
-        format: config.audioFormat
-      }
-      // 修正：参数顺序调整为 (text, voiceId, params, buffer)
-      await cacheManager.saveAudio(text, voiceId, cacheParams, audioBuffer)
+        // 4. 写入本地缓存
+        if (cacheManager) {
+            await cacheManager.saveAudio(text, voiceId, cacheParams, audioBuffer);
+        }
+
+        return audioBuffer;
+
+    } catch (error: any) {
+        logger.error(`[${engine}] TTS 请求失败:`, error?.response?.data ? Buffer.from(error.response.data).toString() : error?.message || error);
+        return null;
     }
-
-    return audioBuffer
-
-  } catch (error) {
-    logger.error('TTS 生成失败:', error)
-    return null
-  }
 }
 
-export async function uploadFile(
-  ctx: Context, 
-  config: Config, 
-  filePath: string, 
-  purpose: 'voice_clone' | 'prompt_audio'
-): Promise<string | null> {
-  // 简化的占位实现，确保编译通过
-  return null
+export async function uploadFile(ctx: Context, config: any, filePath: string, purpose: string) {
+    return null;
 }
 
-export async function cloneVoice(
-  ctx: Context,
-  config: Config,
-  fileId: string,
-  voiceId: string,
-  promptAudioId?: string,
-  promptText?: string,
-  text?: string
-): Promise<Buffer | null> {
-    // 简化的占位实现，确保编译通过
-    return null
+export async function cloneVoice(ctx: Context, config: any, fileId: string, voiceId: string, promptAudioId: string, promptText: string, text: string) {
+    return null;
 }
