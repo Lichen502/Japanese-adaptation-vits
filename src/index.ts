@@ -245,16 +245,26 @@ export type ConfigType = {
     outputFormat?: string;
     languageBoost?: string;
     interjections?: boolean;
+
     // ElevenLabs
     elevenlabsApiKey?: string;
     elevenlabsApiBase?: string;
     elevenlabsVoiceId?: string;
     elevenlabsModelId?: string;
+    // 官方原生 voice_settings
+    elevenlabsSpeed?: number;
     elevenlabsStability?: number;
     elevenlabsSimilarityBoost?: number;
     elevenlabsStyle?: number;
     elevenlabsUseSpeakerBoost?: boolean;
-    elevenlabsAudioFormat?: 'mp3' | 'pcm';
+    // 官方高级控制与格式
+    elevenlabsOutputFormat?: string;
+    elevenlabsAudioFormat?: 'mp3' | 'wav';
+    elevenlabsLanguageCode?: string;
+    elevenlabsApplyTextNormalization?: 'auto' | 'on' | 'off';
+    elevenlabsSeed?: number;
+    elevenlabsOptimizeStreamingLatency?: number;
+
     // Common
     autoSpeech?: {
         enabled?: boolean;
@@ -304,7 +314,7 @@ export const schema: Schema<ConfigType> = Schema.intersect([
             audioFormat: Schema.union([
                 Schema.const('mp3').description('MP3 格式'),
                 Schema.const('wav').description('WAV 格式')
-            ]).default('mp3').description('音频格式'),
+            ]).default('mp3').description('音频封装格式'),
             sampleRate: Schema.union([
                 Schema.const(16000), Schema.const(24000), Schema.const(32000), Schema.const(44100), Schema.const(48000)
             ]).default(32000).description('采样率'),
@@ -319,21 +329,66 @@ export const schema: Schema<ConfigType> = Schema.intersect([
             interjections: Schema.boolean().default(false).description('是否传语气词给模型(仅限支持语气词的模型)'),
         }).description('MiniMax 设置'),
 
-        // --- ElevenLabs 配置项 ---
+        // --- ElevenLabs 配置项 (原生完整支持) ---
         Schema.object({
             provider: Schema.const('elevenlabs'),
             elevenlabsApiKey: Schema.string().default('').description('ElevenLabs API Key').role('secret'),
             elevenlabsApiBase: Schema.string().default('https://api.elevenlabs.io/v1').description('ElevenLabs API 基础地址'),
             elevenlabsVoiceId: Schema.string().default('21m00Tcm4TlvDq8ikWAM').description('默认 Voice ID (例如 Rachel)'),
-            elevenlabsModelId: Schema.string().default('eleven_multilingual_v2').description('TTS 模型 ID'),
-            elevenlabsStability: Schema.number().default(0.5).min(0.0).max(1.0).description('稳定性 (Stability)'),
-            elevenlabsSimilarityBoost: Schema.number().default(0.75).min(0.0).max(1.0).description('相似度提升 (Similarity Boost)'),
-            elevenlabsStyle: Schema.number().default(0.0).min(0.0).max(1.0).description('风格强调 (Style Exaggeration)'),
-            elevenlabsUseSpeakerBoost: Schema.boolean().default(true).description('启用 Speaker Boost'),
+            elevenlabsModelId: Schema.union([
+                Schema.const('eleven_v3').description('eleven_v3 (最新旗舰，语气词与情感最佳)'),
+                Schema.const('eleven_multilingual_v2').description('eleven_multilingual_v2 (经典稳定多语言)'),
+                Schema.const('eleven_flash_v2_5').description('eleven_flash_v2_5 (极速多语言，超低延迟)'),
+                Schema.const('eleven_turbo_v2_5').description('eleven_turbo_v2_5 (质量与速度平衡)'),
+                Schema.string().description('自定义其他模型 ID')
+            ]).default('eleven_v3').description('TTS 模型 ID'),
+
+            // 核心声音属性调节 (voice_settings)
+            elevenlabsSpeed: Schema.number().default(1.0).min(0).max(1.2).step(0.05).description('语速 (0.7 慢速 ~ 1.2 快速，默认 1.0)'),
+            elevenlabsStability: Schema.number().default(0.5).min(0.0).max(1.0).step(0.05).description('稳定性 (较低=更有情绪波动与随机性；较高=冷静沉稳)'),
+            elevenlabsSimilarityBoost: Schema.number().default(0.75).min(0.0).max(1.0).step(0.05).description('相似度提升 (越高越贴近原音色，过高可能引入底噪)'),
+            elevenlabsStyle: Schema.number().default(0.0).min(0.0).max(1.0).step(0.05).description('风格夸张度 (放大说话人的说话风格与情绪，设为 0 较平稳)'),
+            elevenlabsUseSpeakerBoost: Schema.boolean().default(true).description('启用说话人增强 (提高清晰度并强化原声音色相似度)'),
+
+            // 输出格式与质量
+            elevenlabsOutputFormat: Schema.union([
+                Schema.const('mp3_44100_128').description('MP3 44.1kHz 128kbps (标准推荐)'),
+                Schema.const('mp3_44100_192').description('MP3 44.1kHz 192kbps (高清，需付费账号)'),
+                Schema.const('pcm_16000').description('PCM 16kHz (WAV/低采样率)'),
+                Schema.const('pcm_24000').description('PCM 24kHz (WAV/中采样率)'),
+                Schema.const('pcm_44100').description('PCM 44.1kHz (CD无损级 WAV)'),
+                Schema.const('ulaw_8000').description('u-law 8kHz (电话音质)')
+            ]).default('mp3_44100_128').description('API 音频输出编码规格 (output_format)'),
+
             elevenlabsAudioFormat: Schema.union([
-                Schema.const('mp3').description('MP3 格式'),
-                Schema.const('pcm').description('PCM/WAV 格式')
-            ]).default('mp3').description('输出格式'),
+                Schema.const('mp3').description('MP3 封装'),
+                Schema.const('wav').description('WAV 封装')
+            ]).default('mp3').description('本地保存/发送时的封装格式 (若 output_format 为 pcm 请选 wav)'),
+
+            // 高级控制
+            elevenlabsLanguageCode: Schema.union([
+                Schema.const('auto').description('自动识别'),
+                Schema.const('ja').description('日语 (ja)'),
+                Schema.const('zh').description('中文 (zh)'),
+                Schema.const('en').description('英语 (en)'),
+                Schema.const('ko').description('韩语 (ko)'),
+                Schema.string().description('其他 ISO 639-1 语言代码')
+            ]).default('auto').description('强制语言代码 (显式指明发音语言，可减少多语言跑偏)'),
+
+            elevenlabsApplyTextNormalization: Schema.union([
+                Schema.const('auto').description('自动 (auto)'),
+                Schema.const('on').description('开启 (on - 自动将数字、日期与符号转换为读音)'),
+                Schema.const('off').description('关闭 (off - 原样字面读出)')
+            ]).default('auto').description('文本归一化模式 (apply_text_normalization)'),
+
+            elevenlabsSeed: Schema.number().min(-1).max(4294967295).step(1).default(-1).description('随机种子 Seed (-1 为完全随机；指定数字可固定相同的音调起伏)'),
+            elevenlabsOptimizeStreamingLatency: Schema.union([
+                Schema.const(0).description('0 - 关闭延迟优化 (完整音质)'),
+                Schema.const(1).description('1 - 基础低延迟优化'),
+                Schema.const(2).description('2 - 中级低延迟优化'),
+                Schema.const(3).description('3 - 高级低延迟优化'),
+                Schema.const(4).description('4 - 极致首字延迟 (可能稍微影响自然度)')
+            ]).default(0).description('流式延迟优化等级 (optimize_streaming_latency)'),
         }).description('ElevenLabs 设置')
     ]),
 
@@ -388,9 +443,13 @@ function resolveTTSRuntimeParams(config: ConfigType) {
     const apiKey = isEL ? config.elevenlabsApiKey : config.ttsApiKey;
     const apiBase = isEL ? (config.elevenlabsApiBase || 'https://api.elevenlabs.io/v1') : (config.apiBase || 'https://api.minimax.io/v1');
     const defaultVoice = isEL ? (config.elevenlabsVoiceId || '21m00Tcm4TlvDq8ikWAM') : (config.defaultVoice || 'Chinese_female_gentle');
-    const speechModel = isEL ? (config.elevenlabsModelId || 'eleven_multilingual_v2') : (config.speechModel || 'speech-01-turbo');
-    const audioFormat = isEL ? (config.elevenlabsAudioFormat === 'pcm' ? 'wav' : 'mp3') : (config.audioFormat || 'mp3');
+    const speechModel = isEL ? (config.elevenlabsModelId || 'eleven_v3') : (config.speechModel || 'speech-01-turbo');
+
+    // 音频格式适配
+    const isPcmOutput = config.elevenlabsOutputFormat?.startsWith('pcm');
+    const audioFormat = isEL ? (isPcmOutput ? 'wav' : (config.elevenlabsAudioFormat || 'mp3')) : (config.audioFormat || 'mp3');
     const allowInterjections = isEL ? true : Boolean(config.interjections);
+    const speed = isEL ? (config.elevenlabsSpeed ?? 1.0) : (config.speed ?? 1.0);
 
     return {
         ...config,
@@ -405,13 +464,22 @@ function resolveTTSRuntimeParams(config: ConfigType) {
         modelId: speechModel,
         audioFormat,
         allowInterjections,
-        // ElevenLabs 专用
+        speed,
+
+        // ElevenLabs 专用 voice_settings
         stability: config.elevenlabsStability ?? 0.5,
         similarityBoost: config.elevenlabsSimilarityBoost ?? 0.75,
         style: config.elevenlabsStyle ?? 0.0,
         useSpeakerBoost: config.elevenlabsUseSpeakerBoost ?? true,
-        // 通用/MiniMax
-        speed: config.speed ?? 1.0,
+
+        // ElevenLabs 高级生成参数与格式
+        outputFormat: isEL ? (config.elevenlabsOutputFormat || 'mp3_44100_128') : config.outputFormat,
+        languageCode: (isEL && config.elevenlabsLanguageCode !== 'auto') ? config.elevenlabsLanguageCode : undefined,
+        applyTextNormalization: isEL ? config.elevenlabsApplyTextNormalization : undefined,
+        seed: (isEL && config.elevenlabsSeed !== undefined && config.elevenlabsSeed >= 0) ? config.elevenlabsSeed : undefined,
+        optimizeStreamingLatency: isEL ? config.elevenlabsOptimizeStreamingLatency : undefined,
+
+        // 通用 / MiniMax 专属
         vol: config.vol ?? 1.0,
         pitch: config.pitch ?? 0,
     };
