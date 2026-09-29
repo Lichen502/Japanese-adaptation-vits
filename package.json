@@ -1,7 +1,8 @@
 {
   "name": "koishi-plugin-japanese-adaptation-yhy-selfuse-vits",
-  "description": "自用，使用 minimax 生成语音，添加白名单机制、保留语气词",
-  "version": "1.0.2",
+  "description": "自用，使用 minimax/elevenlabs 生成语音，添加白名单机制、保留语气词",
+  "version": "2.0.0",
+  "author": "匪挚 <2040844821@qq.com>",
   "contributors": [
     "唐晓啡 <630320467@qq.com>"
   ],

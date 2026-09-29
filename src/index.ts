@@ -344,7 +344,7 @@ export const schema: Schema<ConfigType> = Schema.intersect([
             ]).default('eleven_v3').description('TTS 模型 ID'),
 
             // 核心声音属性调节 (voice_settings)
-            elevenlabsSpeed: Schema.number().default(1.0).min(0).max(1.2).step(0.05).description('语速 (0.7 慢速 ~ 1.2 快速，默认 1.0)'),
+            elevenlabsSpeed: Schema.number().default(1.0).min(0.7).max(1.2).step(0.05).description('语速 (0.7 慢速 ~ 1.2 快速，默认 1.0)'),
             elevenlabsStability: Schema.number().default(0.5).min(0.0).max(1.0).step(0.05).description('稳定性 (较低=更有情绪波动与随机性；较高=冷静沉稳)'),
             elevenlabsSimilarityBoost: Schema.number().default(0.75).min(0.0).max(1.0).step(0.05).description('相似度提升 (越高越贴近原音色，过高可能引入底噪)'),
             elevenlabsStyle: Schema.number().default(0.0).min(0.0).max(1.0).step(0.05).description('风格夸张度 (放大说话人的说话风格与情绪，设为 0 较平稳)'),
@@ -580,7 +580,7 @@ export function apply(ctx: Context, config: ConfigType) {
                 let targetText = ttsText;
                 if (config.autoSpeech.selectorMode === 'ai_sentence') {
                     try {
-                        const aiSelected = await selectSpeechSentenceByAI(ctx, runtimeParams, ttsText, logger);
+                        const aiSelected = await selectSpeechSentenceByAI(ctx, runtimeParams as any, ttsText, logger);
                         if (aiSelected && aiSelected.length >= (config.autoSpeech.minLength ?? 2)) {
                             targetText = aiSelected;
                         }
@@ -602,7 +602,7 @@ export function apply(ctx: Context, config: ConfigType) {
 
                 // 生成音频
                 const audioBuffers = await Promise.all(
-                    segments.map(seg => generateSpeech(ctx, runtimeParams, seg, runtimeParams.defaultVoice, cacheManager))
+                    segments.map(seg => generateSpeech(ctx, runtimeParams as any, seg, runtimeParams.defaultVoice, cacheManager))
                 );
                 const validBuffers = audioBuffers.filter((b): b is Buffer => b !== null);
                 if (validBuffers.length === 0) return;
@@ -656,9 +656,9 @@ export function apply(ctx: Context, config: ConfigType) {
         try {
             const runtimeParams = resolveTTSRuntimeParams(config);
             if (state.minimaxVitsService) {
-                state.minimaxVitsService.updateConfig(runtimeParams).catch((err: any) => { logger.warn('更新配置失败:', err); });
+                state.minimaxVitsService.updateConfig(runtimeParams as any).catch((err: any) => { logger.warn('更新配置失败:', err); });
             } else {
-                state.minimaxVitsService = new MinimaxVitsService(injectedCtx, runtimeParams);
+                state.minimaxVitsService = new MinimaxVitsService(injectedCtx, runtimeParams as any);
             }
         } catch (error) {
             logger.warn('注册控制台服务异常:', error);
@@ -688,7 +688,7 @@ export function apply(ctx: Context, config: ConfigType) {
             await session.send('语音生成中，请稍候...');
             const buffer = await generateSpeech(
                 ctx,
-                { ...runtimeParams, speed: options?.speed ?? runtimeParams.speed },
+                { ...runtimeParams, speed: options?.speed ?? runtimeParams.speed } as any,
                 ttsText,
                 options?.voice || runtimeParams.defaultVoice,
                 cacheManager
