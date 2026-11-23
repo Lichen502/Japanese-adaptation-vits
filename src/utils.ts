@@ -89,28 +89,96 @@ export async function makeSilkAudioElement(
   buffer: Buffer,
   fallbackFormat: string,
 ): Promise<h> {
-  try {
-    const silk = ctx.get('silk')
-    const ffmpeg = ctx.get('ffmpeg')
-    if (!silk || !ffmpeg) throw new Error('silk/ffmpeg 服务不可用')
+  // 保留原导出签名；实际转换走统一的 safe 实现（含本地变速与尾音垫的可选参数）
+  return makeSilkAudioElementSafe(ctx, buffer, fallbackFormat)
+}
 
-    let silkBuf: Buffer
-    if (typeof silk.isSilk === 'function' && silk.isSilk(buffer)) {
-      silkBuf = buffer                                   // 已是 silk,直接用
-    } else {
-      // 1. 任意音频 → PCM(s16le / 24000Hz / 单声道)
-      const pcm: Buffer = await ffmpeg.builder()
-        .input(buffer)
-        .outputOption('-f', 's16le', '-ar', '24000', '-ac', '1')
-        .run('buffer')
-      // 2. PCM → SILK
-      const encoded = await silk.encode(pcm, 24000)
-      silkBuf = Buffer.from(encoded?.data ?? encoded)
+/**
+ * 音频 → PCM(s16le / 24000Hz / 单声道)。
+ * speed 为本地变速不变调（atempo），折进同一次 ffmpeg 解码，不额外转码；
+ * 对已缓存的音频同样即时生效。依赖 ffmpeg 服务（如 koishi-plugin-ffmpeg-path）。
+ */
+export async function decodeToPcm24k(ctx: Context, buffer: Buffer, speed?: number): Promise<Buffer> {
+  const ffmpeg: any = (ctx && typeof (ctx as any).get === 'function')
+    ? (ctx as any).get('ffmpeg')
+    : (ctx as any)?.ffmpeg
+  if (!ffmpeg) throw new Error('ffmpeg service unavailable')
+
+  const spd = (typeof speed === 'number' && isFinite(speed))
+    ? Math.max(0.5, Math.min(2.0, speed))
+    : 1.0
+  const builder = ffmpeg.builder().input(buffer)
+  if (Math.abs(spd - 1.0) > 0.001) {
+    builder.outputOption('-filter:a', `atempo=${spd}`)
+  }
+  const pcm = await builder
+    .outputOption('-f', 's16le', '-ar', '24000', '-ac', '1')
+    .run('buffer')
+  return Buffer.from(pcm)
+}
+
+/**
+ * PCM 尾部补静音：至少补 minPadMs，且总时长跨过语音结束后的下一整秒再加 50ms。
+ * 防 QQ/NapCat 播放端把时长按整秒下取整时吃掉最后一个音节；minPadMs=0 表示不补。
+ */
+export function padPcmTail(pcm: Buffer, minPadMs: number): Buffer {
+  const bytesPerSec = 24000 * 2
+  const durMs = pcm.length / bytesPerSec * 1000
+  const targetMs = Math.max(durMs + minPadMs, (Math.floor(durMs / 1000) + 1) * 1000 + 50)
+  const padBytes = Math.max(0, Math.ceil((targetMs - durMs) / 1000 * bytesPerSec / 2) * 2)
+  return Buffer.concat([Buffer.from(pcm), Buffer.alloc(padBytes)])
+}
+
+/** PCM → SILK 消息元素。依赖 silk 服务（enableSilk: true）。 */
+export async function silkElementFromPcm(ctx: Context, pcm: Buffer): Promise<h> {
+  const silk: any = (ctx && typeof (ctx as any).get === 'function')
+    ? (ctx as any).get('silk')
+    : (ctx as any)?.silk
+  if (!silk) throw new Error('silk service unavailable')
+  const encoded = await silk.encode(pcm, 24000)
+  const silkBuf = Buffer.from(encoded?.data ?? encoded)
+  return h('audio', { src: `data:audio/silk;base64,${silkBuf.toString('base64')}` })
+}
+
+/**
+ * 发送前的完整 SILK 转换入口：已是 silk 直接透传；否则解码 → 可选变速/尾音垫 → 编码。
+ * 任一步失败都回退到原始音频元素，保证不比不使用该链路更差。
+ */
+export async function makeSilkAudioElementSafe(
+  ctx: Context,
+  buffer: Buffer,
+  fallbackFormat: string,
+  speed?: number,
+  tailPadMs?: number,
+): Promise<h> {
+  try {
+    const silk: any = (ctx && typeof (ctx as any).get === 'function')
+      ? (ctx as any).get('silk')
+      : (ctx as any)?.silk
+    if (silk && typeof silk.isSilk === 'function' && silk.isSilk(buffer)) {
+      return h('audio', { src: `data:audio/silk;base64,${Buffer.from(buffer).toString('base64')}` })
     }
-    return h('audio', { src: `data:audio/silk;base64,${silkBuf.toString('base64')}` })
+
+    let pcm = await decodeToPcm24k(ctx, buffer, speed)
+    const pad = (typeof tailPadMs === 'number' && isFinite(tailPadMs))
+      ? Math.max(0, Math.min(2000, tailPadMs))
+      : 0
+    if (pad > 0 && pcm.length > 0) {
+      const durMs = pcm.length / (24000 * 2) * 1000
+      pcm = padPcmTail(pcm, pad)
+      const totalMs = pcm.length / (24000 * 2) * 1000
+      try {
+        ctx.logger('tts-adaptation-service').info(
+          `silk: 语音 ${(durMs / 1000).toFixed(2)}s → 总长 ${(totalMs / 1000).toFixed(2)}s (垫 ${Math.round(totalMs - durMs)}ms)`,
+        )
+      } catch { /* 日志不可用时忽略 */ }
+    }
+    return await silkElementFromPcm(ctx, pcm)
   } catch (e) {
-    ctx.logger('vits').warn('SILK 转换失败,回退原始音频:%s', (e as Error)?.message ?? e)
-    return makeAudioElement(buffer, fallbackFormat)      // 复用现有函数
+    try {
+      ctx.logger('tts-adaptation-service').warn('SILK 转换失败,回退原始音频:%s', (e as Error)?.message ?? e)
+    } catch { /* 日志不可用时忽略 */ }
+    return makeAudioElement(buffer, fallbackFormat)
   }
 }
 

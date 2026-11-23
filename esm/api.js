@@ -25,6 +25,128 @@ function getCacheParams(config) {
         };
     }
 }
+// previous_text 支持性的进程内记忆：模型报错时置位，避免每条都撞同一个错误
+let elPreviousTextUnsupported = false;
+/** ElevenLabs 缓存参数（含上下文与音色设置，避免不同韵律误命中同一缓存） */
+function getELCacheParams(config, previousText) {
+    var _a;
+    return {
+        engine: 'elevenlabs',
+        model: config.speechModel,
+        stability: config.stability,
+        similarityBoost: config.similarityBoost,
+        style: config.style,
+        speed: config.speed,
+        useSpeakerBoost: config.useSpeakerBoost,
+        format: (_a = config.outputFormat) !== null && _a !== void 0 ? _a : 'mp3_44100_128',
+        prev: previousText,
+    };
+}
+/**
+ * ElevenLabs 整条合成：一条消息只请求一次，保留同一消息内的声线标签与文本上下文。
+ * previousText 来自同频道最近几条已合成文本；eleven_v3 不支持该字段，自动跳过。
+ * 失败返回 null，由上游降级为只发文字。
+ */
+export async function generateSpeechElevenLabs(ctx, config, text, voiceId, cacheManager, previousText) {
+    var _a, _b, _c, _d, _e, _f;
+    const logger = ctx.logger('elevenlabs-tts');
+    const modelId = config.speechModel || 'eleven_multilingual_v2';
+    const outputFormat = config.outputFormat || 'mp3_44100_128';
+    const supportsPrev = !/^eleven_v3/i.test(modelId) && !elPreviousTextUnsupported;
+    const effectivePrev = (supportsPrev && previousText) ? String(previousText) : '';
+    if (!config.ttsApiKey) {
+        logger.error('未配置 ElevenLabs API Key，无法调用接口');
+        return null;
+    }
+    if (!voiceId) {
+        logger.error('未配置 ElevenLabs Voice ID');
+        return null;
+    }
+    const cacheParams = getELCacheParams(config, effectivePrev);
+    if (cacheManager) {
+        const cached = await cacheManager.getAudio(text, voiceId, cacheParams);
+        if (cached) {
+            if (config.debug)
+                logger.info('命中本地音频缓存 (ElevenLabs)');
+            return cached;
+        }
+    }
+    const payload = {
+        text,
+        model_id: modelId,
+        voice_settings: {
+            stability: (_a = config.stability) !== null && _a !== void 0 ? _a : 0.5,
+            similarity_boost: (_b = config.similarityBoost) !== null && _b !== void 0 ? _b : 0.75,
+            style: (_c = config.style) !== null && _c !== void 0 ? _c : 0.0,
+            use_speaker_boost: (_d = config.useSpeakerBoost) !== null && _d !== void 0 ? _d : true,
+            speed: (_e = config.speed) !== null && _e !== void 0 ? _e : 1.0,
+        },
+    };
+    if (effectivePrev)
+        payload.previous_text = effectivePrev;
+    // 将 UI 已暴露的官方高级参数真正接入请求
+    if (typeof config.seed === 'number' && config.seed >= 0)
+        payload.seed = config.seed;
+    let baseUrl = String(config.apiBase || 'https://api.elevenlabs.io/v1').replace(/\/$/, '');
+    const query = [`output_format=${encodeURIComponent(outputFormat)}`];
+    if (config.applyTextNormalization) {
+        query.push(`apply_text_normalization=${encodeURIComponent(config.applyTextNormalization)}`);
+    }
+    if (config.languageCode) {
+        query.push(`language_code=${encodeURIComponent(config.languageCode)}`);
+    }
+    if (typeof config.optimizeStreamingLatency === 'number') {
+        query.push(`optimize_streaming_latency=${config.optimizeStreamingLatency}`);
+    }
+    const url = `${baseUrl}/text-to-speech/${encodeURIComponent(voiceId)}?${query.join('&')}`;
+    if (config.debug) {
+        logger.info(`[ElevenLabs] 请求 URL: ${url}`);
+        logger.info('[ElevenLabs] 请求 payload:', JSON.stringify({ ...payload, text: String(text).slice(0, 50) }));
+    }
+    try {
+        const response = await ctx.http.post(url, payload, {
+            headers: {
+                'xi-api-key': config.ttsApiKey,
+                'Content-Type': 'application/json',
+            },
+            responseType: 'arraybuffer',
+        });
+        const resBuffer = Buffer.isBuffer(response) ? response : Buffer.from(response);
+        const head = resBuffer.toString('utf8', 0, Math.min(1, resBuffer.length));
+        if (head === '{' || head === '[') {
+            logger.error('[ElevenLabs] API 响应错误:', resBuffer.toString('utf8').slice(0, 300));
+            return null;
+        }
+        if (resBuffer.length === 0) {
+            logger.error('[ElevenLabs] 返回空音频');
+            return null;
+        }
+        if (cacheManager) {
+            await cacheManager.saveAudio(text, voiceId, cacheParams, resBuffer);
+        }
+        return resBuffer;
+    }
+    catch (error) {
+        let detail = '';
+        try {
+            const d = (_f = error === null || error === void 0 ? void 0 : error.response) === null || _f === void 0 ? void 0 : _f.data;
+            if (d) {
+                detail = Buffer.isBuffer(d) ? d.toString('utf8').slice(0, 300)
+                    : typeof d === 'string' ? d.slice(0, 300)
+                        : JSON.stringify(d).slice(0, 300);
+            }
+        }
+        catch { /* ignore */ }
+        const msg = `${(error === null || error === void 0 ? void 0 : error.message) || ''} ${detail}`;
+        if (effectivePrev && msg.includes('previous_text')) {
+            elPreviousTextUnsupported = true;
+            logger.warn('该模型不支持 previous_text，已自动禁用上下文缝合并重试本条');
+            return generateSpeechElevenLabs(ctx, config, text, voiceId, cacheManager, undefined);
+        }
+        logger.error(`[ElevenLabs] TTS 请求失败:`, (error === null || error === void 0 ? void 0 : error.message) || error, detail);
+        return null;
+    }
+}
 /**
  * 核心语音生成函数
  */

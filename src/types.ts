@@ -37,6 +37,11 @@ export interface Config {
   elevenlabsApplyTextNormalization?: 'auto' | 'on' | 'off'; // 文本归一化
   elevenlabsSeed?: number; // 随机种子 (-1 或具体数值)
   elevenlabsOptimizeStreamingLatency?: number; // 流式延迟优化等级 (0 ~ 4)
+  elevenlabsLocalSpeed?: number; // 本地变速不变调 (atempo, 0.5 ~ 2.0)
+  elevenlabsTailPadMs?: number; // 尾部静音垫最小值 ms (0 = 关闭)
+  elevenlabsContextStitching?: boolean; // previous_text 上下文缝合
+  elevenlabsContextMaxChars?: number; // previous_text 最大字符数
+  silkEnabled?: boolean; // 非微信平台发送前转 SILK
 
   // === 运行时兼容映射字段（供 api.ts 统一读取）===
   apiKey?: string;
@@ -61,6 +66,9 @@ export interface Config {
       privateEnabled?: boolean;
       privateList?: string[];
     };
+    userProviders?: Array<{ userId: string; provider: 'minimax' | 'elevenlabs' }>;
+    skipPrivateUsers?: string[];
+    mindSpeakingOnly?: boolean;
     sendMode?: 'voice_only' | 'text_and_voice' | 'mixed';
     minLength?: number;
     selectorMode?: 'full' | 'ai_sentence' | 'openai_filter';

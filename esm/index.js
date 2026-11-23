@@ -3,9 +3,14 @@ import { Schema, h } from 'koishi';
 import { AudioCacheManager } from './cache';
 import { MinimaxVitsService } from './service';
 import { generateSpeech } from './api';
-import { isWeixinLikePlatform, makeAudioElement, makeWeixinAudioElement, removeTempFile, writeTempAudioFile } from './utils';
+import { isWeixinLikePlatform, makeAudioElement, makeSilkAudioElementSafe, makeWeixinAudioElement, removeTempFile, writeTempAudioFile } from './utils';
+import { generateSpeechElevenLabs } from './api';
 import { selectSpeechSentenceByAI } from './tool';
 export const name = 'tts-adaptation-service';
+// SILK/ffmpeg 为可选服务；缺失时自动回退原始音频，不影响纯文字发送
+export const inject = {
+    optional: ['console', 'chatluna', 'chatluna_mind', 'silk', 'ffmpeg']
+};
 // ==========================================
 // 模块 A: 语气词与文本清洗系统
 // ==========================================
@@ -106,12 +111,15 @@ function cleanModelOutput(text, allowInterjections = false, engine = 'minimax') 
     // 通用预处理：去除思维链
     let base = text.replace(/<\|im_start\|>[\s\S]*?<\|im_end\|>/g, '');
     base = base.replace(/<think>[\s\S]*?<\/think>/gi, '');
-    if (engine === 'elevenlabs') {
-        return cleanElevenLabsOutput(base, allowInterjections);
+    const result = engine === 'elevenlabs'
+        ? cleanElevenLabsOutput(base, allowInterjections)
+        : cleanMinimaxOutput(base, allowInterjections);
+    // 尾音保护第一层：只给 TTS 文本补终止标点，展示文本保持聊天原貌。
+    // 聊天风格消息常无句尾信号，TTS 缺句号时最后一个音节容易被截断。
+    if (result.ttsText && !/[。！？!?…～~]$/.test(result.ttsText)) {
+        result.ttsText = result.ttsText.replace(/[、，,]+$/, '') + '。';
     }
-    else {
-        return cleanMinimaxOutput(base, allowInterjections);
-    }
+    return result;
 }
 // ==========================================
 // 模块 B: 文本分段
@@ -214,7 +222,7 @@ export const schema = Schema.intersect([
             provider: Schema.const('minimax'),
             ttsApiKey: Schema.string().default('').description('MiniMax TTS API Key').role('secret'),
             groupId: Schema.string().default('').description('MiniMax Group ID'),
-            apiBase: Schema.string().default('https://api.minimax.io/v1').description('API 基础地址'),
+            apiBase: Schema.string().default('https://api.minimax.com/v1').description('API 基础地址'),
             defaultVoice: Schema.string().default('Chinese_female_gentle').description('默认语音 ID'),
             speechModel: Schema.string().default('speech-01-turbo').description('TTS 模型 (推荐 speech-01-turbo)'),
             speed: Schema.number().default(1.0).min(0.5).max(2.0).description('语速'),
@@ -243,13 +251,7 @@ export const schema = Schema.intersect([
             elevenlabsApiKey: Schema.string().default('').description('ElevenLabs API Key').role('secret'),
             elevenlabsApiBase: Schema.string().default('https://api.elevenlabs.io/v1').description('ElevenLabs API 基础地址'),
             elevenlabsVoiceId: Schema.string().default('21m00Tcm4TlvDq8ikWAM').description('默认 Voice ID (例如 Rachel)'),
-            elevenlabsModelId: Schema.union([
-                Schema.const('eleven_v3').description('eleven_v3 (最新旗舰，语气词与情感最佳)'),
-                Schema.const('eleven_multilingual_v2').description('eleven_multilingual_v2 (经典稳定多语言)'),
-                Schema.const('eleven_flash_v2_5').description('eleven_flash_v2_5 (极速多语言，超低延迟)'),
-                Schema.const('eleven_turbo_v2_5').description('eleven_turbo_v2_5 (质量与速度平衡)'),
-                Schema.string().description('自定义其他模型 ID')
-            ]).default('eleven_v3').description('TTS 模型 ID'),
+            elevenlabsModelId: Schema.string().default('eleven_v3').description('TTS 模型 ID (如: eleven_v3, eleven_multilingual_v2, eleven_flash_v2_5 等)'),
             // 核心声音属性调节 (voice_settings)
             elevenlabsSpeed: Schema.number().default(1.0).min(0.7).max(1.2).step(0.05).description('语速 (0.7 慢速 ~ 1.2 快速，默认 1.0)'),
             elevenlabsStability: Schema.number().default(0.5).min(0.0).max(1.0).step(0.05).description('稳定性 (较低=更有情绪波动与随机性；较高=冷静沉稳)'),
@@ -291,36 +293,69 @@ export const schema = Schema.intersect([
                 Schema.const(3).description('3 - 高级低延迟优化'),
                 Schema.const(4).description('4 - 极致首字延迟 (可能稍微影响自然度)')
             ]).default(0).description('流式延迟优化等级 (optimize_streaming_latency)'),
+            // 本地 SILK 链路选项（与 API 的 voice_settings.speed 独立）
+            elevenlabsLocalSpeed: Schema.number().default(1.0).min(0.5).max(2.0).step(0.05)
+                .description('本地语速 (atempo，0.5~2.0；不经 API，对缓存音频也即时生效，需 ffmpeg/silk 服务)'),
+            elevenlabsTailPadMs: Schema.number().default(300).min(0).max(2000).step(50)
+                .description('尾部静音垫最小值 ms (自动补齐到跨过下一整秒再加 50ms，0=关闭；需 ffmpeg/silk 服务)'),
+            elevenlabsContextStitching: Schema.boolean().default(true)
+                .description('previous_text 上下文缝合 (按频道取最近三条；eleven_v3 自动跳过，模型不支持时自动禁用)'),
+            elevenlabsContextMaxChars: Schema.number().default(300).min(0).max(2000)
+                .description('previous_text 最大字符数'),
         }).description('ElevenLabs 设置')
     ]),
     // 3. 通用配置（不论选哪个服务商都会显示）
     Schema.object({
-        autoSpeech: Schema.object({
-            enabled: Schema.boolean().default(false).description('启用 ChatLuna 对话自动转语音'),
-            whitelist: Schema.object({
-                groupEnabled: Schema.boolean().default(false).description('启用群聊白名单（开启后仅白名单内群聊触发自动转语音）'),
-                groupList: Schema.array(String).role('table').default([]).description('群聊白名单列表 (填写群号)'),
-                privateEnabled: Schema.boolean().default(false).description('启用私聊白名单（开启后仅白名单内用户触发自动转语音）'),
-                privateList: Schema.array(String).role('table').default([]).description('私聊白名单列表 (填写用户Id)'),
-            }).description('黑白名单机制（关闭则对所有人生效）'),
-            sendMode: Schema.union([
-                Schema.const('voice_only').description('仅发送语音'),
-                Schema.const('text_and_voice').description('发送语音+文本(分两条)'),
-                Schema.const('mixed').description('文本+语音混合(同条消息)')
-            ]).default('text_and_voice').description('发送模式'),
-            minLength: Schema.number().default(2).description('触发转换的最短字符数'),
-            selectorMode: Schema.union([
-                Schema.const('full').description('整条文本直接转语音（默认逻辑）'),
-                Schema.const('ai_sentence').description('交给 ChatLuna / 小模型从中挑选一句朗读'),
-                Schema.const('openai_filter').description('通过 OpenAI 兼容接口，让小模型决定具体朗读内容'),
-            ]).default('full').description('语音内容选择策略'),
-            openaiLikeBaseUrl: Schema.string().description('OpenAI 兼容接口 Base URL'),
-            openaiLikeApiKey: Schema.string().role('secret').description('OpenAI 兼容接口 API Key'),
-            openaiLikeModel: Schema.string().description('用于筛选朗读内容的小模型名称'),
-            customPrompt: Schema.string().role('textarea')
-                .default('你是一个专业的"语音内容筛选助手"。你的任务是从给定的聊天文本中挑选出最适合朗读的一段。\n\n筛选规则：\n1. 选择自然流畅、口语化的内容（对话、回答、叙述），偏向于情感表达的句子，比如"你好"、"我很喜欢你"等类似句子。\n2. 排除以下内容：\n   - 思维链、推理过程（如"让我想想..."、"因为...所以..."）\n   - 代码块、技术术语\n   - 系统提示、指令、引导语\n   - 重复的客套话\n3. 如果整段都不适合朗读，返回"EMPTY"\n\n输出要求：\n- 只返回选中的内容，不要添加任何解释、标点或引号\n- 如果不适合朗读，返回"EMPTY"\n- 返回内容长度控制在 20-100 字之间效果最佳')
-                .description('自定义 System Prompt'),
-        }).description('自动语音转换设置'),
+        autoSpeech: Schema.intersect([
+            Schema.object({
+                enabled: Schema.boolean().default(false).description('启用 ChatLuna 对话自动转语音'),
+                minLength: Schema.number().default(2).description('触发转换的最短字符数'),
+            }).description('基础'),
+            Schema.object({
+                whitelist: Schema.object({
+                    groupEnabled: Schema.boolean().default(false).description('启用群聊白名单（开启后仅白名单内群聊触发自动转语音）'),
+                    groupList: Schema.array(String).role('table').default([]).description('群聊白名单列表 (填写群号)'),
+                    privateEnabled: Schema.boolean().default(false).description('启用私聊白名单（开启后仅白名单内用户触发自动转语音）'),
+                    privateList: Schema.array(String).role('table').default([]).description('私聊白名单列表 (填写用户Id)'),
+                }).description('黑白名单机制（关闭则对所有人生效）'),
+                skipPrivateUsers: Schema.array(String).role('table').default([])
+                    .description('私聊中跳过语音的对象 (如其他 bot 的 ID；仅私聊生效，文字照常发送，不受白名单开关影响)'),
+                mindSpeakingOnly: Schema.boolean().default(false)
+                    .description('仅在 chatluna_mind 服务判定当前频道正在发言时才合成语音 (未装该服务时行为不变)'),
+            }).description('触发范围'),
+            Schema.object({
+                userProviders: Schema.array(Schema.object({
+                    userId: Schema.string().description('用户 ID (私聊填用户 ID，群聊填发送者 ID；与白名单一致支持部分匹配)'),
+                    provider: Schema.union([
+                        Schema.const('minimax').description('MiniMax'),
+                        Schema.const('elevenlabs').description('ElevenLabs')
+                    ]).default('minimax').description('该用户使用的服务商'),
+                })).role('table').default([])
+                    .description('按用户指定 TTS 服务商（命中即覆盖顶部选择；留空或未命中则跟随顶部 provider）'),
+                sendMode: Schema.union([
+                    Schema.const('voice_only').description('仅发送语音'),
+                    Schema.const('text_and_voice').description('发送语音+文本(分两条)'),
+                    Schema.const('mixed').description('文本+语音混合(同条消息)')
+                ]).default('text_and_voice').description('发送模式'),
+            }).description('服务商与发送'),
+            Schema.object({
+                selectorMode: Schema.union([
+                    Schema.const('full').description('整条文本直接转语音（默认逻辑）'),
+                    Schema.const('ai_sentence').description('交给 ChatLuna / 小模型从中挑选一句朗读'),
+                    Schema.const('openai_filter').description('通过 OpenAI 兼容接口，让小模型决定具体朗读内容'),
+                ]).default('full').description('语音内容选择策略'),
+                openaiLikeBaseUrl: Schema.string().description('OpenAI 兼容接口 Base URL'),
+                openaiLikeApiKey: Schema.string().role('secret').description('OpenAI 兼容接口 API Key'),
+                // 复用 ChatLuna 注册的全局 model 动态下拉（与 chatluna-character 同款），
+                // 列出所有已配置模型供选择；未装 ChatLuna 时 dynamic 退化为 any，可手填任意模型名。
+                openaiLikeModel: Schema.dynamic('model').description('用于筛选朗读内容的小模型（从 ChatLuna 已配置模型中选择；也可手填任意兼容模型名）'),
+                customPrompt: Schema.string().role('textarea')
+                    .default('你是一个专业的"语音内容筛选助手"。你的任务是从给定的聊天文本中挑选出最适合朗读的一段。\n\n筛选规则：\n1. 选择自然流畅、口语化的内容（对话、回答、叙述），偏向于情感表达的句子，比如"你好"、"我很喜欢你"等类似句子。\n2. 排除以下内容：\n   - 思维链、推理过程（如"让我想想..."、"因为...所以..."）\n   - 代码块、技术术语\n   - 系统提示、指令、引导语\n   - 重复的客套话\n3. 如果整段都不适合朗读，返回"EMPTY"\n\n输出要求：\n- 只返回选中的内容，不要添加任何解释、标点或引号\n- 如果不适合朗读，返回"EMPTY"\n- 返回内容长度控制在 20-100 字之间效果最佳')
+                    .description('自定义 System Prompt'),
+            }).description('朗读内容'),
+        ]).description('自动语音转换设置'),
+        silkEnabled: Schema.boolean().default(true)
+            .description('非微信平台发送前转 SILK (需 ffmpeg/silk 服务，如 koishi-plugin-ffmpeg-path 开启 enableSilk；失败自动回退原始音频)'),
         debug: Schema.boolean().default(false).description('启用调试日志'),
         cacheEnabled: Schema.boolean().default(true).description('启用本地文件缓存'),
         cacheDir: Schema.string().default('./data/tts-adaptation-service/cache').description('缓存路径'),
@@ -329,12 +364,31 @@ export const schema = Schema.intersect([
     }).description('通用/其他设置')
 ]);
 export const Config = schema;
+/** 计算某条消息实际使用的服务商：用户指定优先，未命中跟随顶部 provider */
+function resolveSessionProvider(config, session) {
+    var _a, _b;
+    const overrides = ((_a = config.autoSpeech) === null || _a === void 0 ? void 0 : _a.userProviders) || [];
+    const ids = [session === null || session === void 0 ? void 0 : session.userId, session === null || session === void 0 ? void 0 : session.channelId]
+        .filter(Boolean)
+        .map((id) => String(id));
+    for (const item of overrides) {
+        const target = String((_b = item === null || item === void 0 ? void 0 : item.userId) !== null && _b !== void 0 ? _b : '').trim();
+        if (!target)
+            continue;
+        if (ids.some(id => id === target || id.includes(target))) {
+            return item.provider === 'elevenlabs' ? 'elevenlabs' : 'minimax';
+        }
+    }
+    return config.provider;
+}
 /**
  * 运行时参数适配辅助函数：将分别保存的配置映射为 TTS API 标准入参
+ * providerOverride 用于按用户覆盖顶部服务商选择，其余配置仍共用同一份 schema。
  */
-function resolveTTSRuntimeParams(config) {
+function resolveTTSRuntimeParams(config, providerOverride) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _j;
-    const isEL = config.provider === 'elevenlabs';
+    const provider = providerOverride !== null && providerOverride !== void 0 ? providerOverride : config.provider;
+    const isEL = provider === 'elevenlabs';
     const apiKey = isEL ? config.elevenlabsApiKey : config.ttsApiKey;
     const apiBase = isEL ? (config.elevenlabsApiBase || 'https://api.elevenlabs.io/v1') : (config.apiBase || 'https://api.minimax.io/v1');
     const defaultVoice = isEL ? (config.elevenlabsVoiceId || '21m00Tcm4TlvDq8ikWAM') : (config.defaultVoice || 'Chinese_female_gentle');
@@ -346,8 +400,8 @@ function resolveTTSRuntimeParams(config) {
     const speed = isEL ? ((_b = config.elevenlabsSpeed) !== null && _b !== void 0 ? _b : 1.0) : ((_c = config.speed) !== null && _c !== void 0 ? _c : 1.0);
     return {
         ...config,
-        engine: config.provider,
-        provider: config.provider,
+        engine: provider,
+        provider,
         ttsApiKey: apiKey,
         apiKey: apiKey,
         apiBase,
@@ -397,12 +451,14 @@ export function apply(ctx, config) {
     // ======================================================
     // 2. 核心拦截：对话后自动语音转换
     // ======================================================
+    // ElevenLabs previous_text 上下文：按频道记录最近已合成文本
+    const recentTtsByChannel = new Map();
     if ((_e = config.autoSpeech) === null || _e === void 0 ? void 0 : _e.enabled) {
         ctx.on('ready', () => {
             logger.info(`全局语音拦截已启动 (当前服务商: ${config.provider})`);
         });
         ctx.before('send', async (session) => {
-            var _a, _b, _c, _d;
+            var _a, _b, _c, _d, _e, _f, _g;
             try {
                 if (!session.content)
                     return;
@@ -410,14 +466,32 @@ export function apply(ctx, config) {
                 if (session.content.includes('<audio') || session.content.includes('[CQ:record')) {
                     return;
                 }
-                const runtimeParams = resolveTTSRuntimeParams(config);
+                // 可选 mind 门控：只给脑插件正在发言的频道配音；
+                // 没有 chatluna_mind 服务或该方法时保持原路径，不引入硬依赖。
+                if ((_a = config.autoSpeech) === null || _a === void 0 ? void 0 : _a.mindSpeakingOnly) {
+                    let mindSvc;
+                    try {
+                        mindSvc = typeof ctx.get === 'function' ? ctx.get('chatluna_mind') : undefined;
+                    }
+                    catch {
+                        mindSvc = undefined;
+                    }
+                    if (mindSvc && typeof mindSvc.isSpeaking === 'function' && !mindSvc.isSpeaking(session.channelId)) {
+                        if (config.debug)
+                            logger.info(`[脑挡] ${session.channelId} 这条不是脑在说，不合成语音`);
+                        return;
+                    }
+                }
+                // 按用户覆盖服务商：命中 userProviders 用指定引擎，否则跟随顶部 provider
+                const effectiveProvider = resolveSessionProvider(config, session);
+                const runtimeParams = resolveTTSRuntimeParams(config, effectiveProvider);
                 const elements = session.elements || h.parse(session.content);
-                // 根据当前引擎清洗展示文本：
+                // 根据本次实际使用的引擎清洗展示文本：
                 // ElevenLabs 剔除所有 [xxx] 标签，MiniMax 剔除名单内的 (xxx)
                 const userVisibleElements = h.transform(elements, {
                     text: (attrs) => {
                         let cleaned = attrs.content;
-                        if (config.provider === 'elevenlabs') {
+                        if (effectiveProvider === 'elevenlabs') {
                             cleaned = cleaned.replace(ELEVENLABS_TAG_REGEX, '');
                         }
                         else {
@@ -437,8 +511,19 @@ export function apply(ctx, config) {
                 const rawTextForTTS = elements
                     .map(el => el.type === 'text' ? el.attrs.content : '')
                     .join(' ');
+                // 私聊排除（如其他 bot 之间的自动交流）：与白名单用途不同，命中即跳过语音，文字照常发送
+                const skipPrivateUsers = (((_b = config.autoSpeech) === null || _b === void 0 ? void 0 : _b.skipPrivateUsers) || [])
+                    .map(id => String(id).trim()).filter(Boolean);
+                if (skipPrivateUsers.length && (session.isDirect || !session.guildId)) {
+                    const target = `${session.userId || ''} ${session.channelId || ''}`;
+                    if (skipPrivateUsers.some(id => target.includes(id))) {
+                        if (config.debug)
+                            logger.info(`[私聊跳过] ${session.channelId || session.userId} 在 skipPrivateUsers 中，不合成语音`);
+                        return;
+                    }
+                }
                 // 检查白名单
-                if ((_a = config.autoSpeech) === null || _a === void 0 ? void 0 : _a.whitelist) {
+                if ((_c = config.autoSpeech) === null || _c === void 0 ? void 0 : _c.whitelist) {
                     const wl = config.autoSpeech.whitelist;
                     const isDirect = session.isDirect || !session.guildId;
                     const targetUserId = session.userId || session.channelId || '';
@@ -455,15 +540,15 @@ export function apply(ctx, config) {
                     }
                 }
                 // 清洗出供语音模型读的文本 (保留对应语气词标签)
-                const { ttsText } = cleanModelOutput(rawTextForTTS, runtimeParams.allowInterjections, config.provider);
-                if (!ttsText || ttsText.length < ((_b = config.autoSpeech.minLength) !== null && _b !== void 0 ? _b : 2)) {
+                const { ttsText } = cleanModelOutput(rawTextForTTS, runtimeParams.allowInterjections, effectiveProvider);
+                if (!ttsText || ttsText.length < ((_d = config.autoSpeech.minLength) !== null && _d !== void 0 ? _d : 2)) {
                     return;
                 }
                 let targetText = ttsText;
                 if (config.autoSpeech.selectorMode === 'ai_sentence') {
                     try {
                         const aiSelected = await selectSpeechSentenceByAI(ctx, runtimeParams, ttsText, logger);
-                        if (aiSelected && aiSelected.length >= ((_c = config.autoSpeech.minLength) !== null && _c !== void 0 ? _c : 2)) {
+                        if (aiSelected && aiSelected.length >= ((_e = config.autoSpeech.minLength) !== null && _e !== void 0 ? _e : 2)) {
                             targetText = aiSelected;
                         }
                     }
@@ -474,7 +559,7 @@ export function apply(ctx, config) {
                 else if (config.autoSpeech.selectorMode === 'openai_filter') {
                     try {
                         const selected = await selectSpeechTextByOpenAI(ctx, config, ttsText, logger);
-                        if (!selected || selected.trim().length < ((_d = config.autoSpeech.minLength) !== null && _d !== void 0 ? _d : 2))
+                        if (!selected || selected.trim().length < ((_f = config.autoSpeech.minLength) !== null && _f !== void 0 ? _f : 2))
                             return;
                         targetText = selected.trim();
                     }
@@ -482,11 +567,35 @@ export function apply(ctx, config) {
                         logger.warn('OpenAI 筛选失败:', e);
                     }
                 }
-                const segments = splitTextIntoSegments(targetText);
-                if (segments.length === 0)
-                    return;
-                // 生成音频
-                const audioBuffers = await Promise.all(segments.map(seg => generateSpeech(ctx, runtimeParams, seg, runtimeParams.defaultVoice, cacheManager)));
+                // 生成音频：ElevenLabs 整条一次合成以保留同消息内的标签与上下文；
+                // MiniMax 仍按原逻辑分句合成。
+                let audioBuffers;
+                if (effectiveProvider === 'elevenlabs') {
+                    const chKey = `${session.platform || 'qq'}:${session.channelId || session.userId || 'unknown'}`;
+                    let prevText = '';
+                    if (config.elevenlabsContextStitching !== false) {
+                        const hist = recentTtsByChannel.get(chKey) || [];
+                        prevText = hist.join(' ');
+                        const maxChars = (_g = config.elevenlabsContextMaxChars) !== null && _g !== void 0 ? _g : 300;
+                        if (prevText.length > maxChars)
+                            prevText = prevText.slice(-maxChars);
+                    }
+                    const buf = await generateSpeechElevenLabs(ctx, runtimeParams, targetText, runtimeParams.defaultVoice, cacheManager, prevText || undefined);
+                    if (buf) {
+                        const hist = recentTtsByChannel.get(chKey) || [];
+                        hist.push(targetText);
+                        while (hist.length > 3)
+                            hist.shift();
+                        recentTtsByChannel.set(chKey, hist);
+                    }
+                    audioBuffers = [buf];
+                }
+                else {
+                    const segments = splitTextIntoSegments(targetText);
+                    if (segments.length === 0)
+                        return;
+                    audioBuffers = await Promise.all(segments.map(seg => generateSpeech(ctx, runtimeParams, seg, runtimeParams.defaultVoice, cacheManager)));
+                }
                 const validBuffers = audioBuffers.filter((b) => b !== null);
                 if (validBuffers.length === 0)
                     return;
@@ -497,6 +606,10 @@ export function apply(ctx, config) {
                 if (isWeixin) {
                     tempAudioPath = await writeTempAudioFile(finalBuffer, runtimeParams.audioFormat);
                     audioElem = makeWeixinAudioElement(tempAudioPath);
+                }
+                else if (config.silkEnabled !== false) {
+                    // 发送前转 SILK：解决部分 NapCat/Exec 环境无法把 MP3 转 SILK 导致语音发不出去的问题
+                    audioElem = await makeSilkAudioElementSafe(ctx, finalBuffer, runtimeParams.audioFormat, effectiveProvider === 'elevenlabs' ? config.elevenlabsLocalSpeed : undefined, effectiveProvider === 'elevenlabs' ? config.elevenlabsTailPadMs : undefined);
                 }
                 else {
                     audioElem = makeAudioElement(finalBuffer, runtimeParams.audioFormat);
@@ -564,15 +677,22 @@ export function apply(ctx, config) {
         var _a;
         if (!session || !text)
             return '请输入要合成的文本';
-        const runtimeParams = resolveTTSRuntimeParams(config);
-        const { ttsText, displayText } = cleanModelOutput(text, runtimeParams.allowInterjections, config.provider);
+        const effectiveProvider = resolveSessionProvider(config, session);
+        const runtimeParams = resolveTTSRuntimeParams(config, effectiveProvider);
+        const { ttsText, displayText } = cleanModelOutput(text, runtimeParams.allowInterjections, effectiveProvider);
         if (!ttsText)
             return '清洗后文本为空，无需生成语音';
         await session.send('语音生成中，请稍候...');
-        const buffer = await generateSpeech(ctx, { ...runtimeParams, speed: (_a = options === null || options === void 0 ? void 0 : options.speed) !== null && _a !== void 0 ? _a : runtimeParams.speed }, ttsText, (options === null || options === void 0 ? void 0 : options.voice) || runtimeParams.defaultVoice, cacheManager);
+        const callParams = { ...runtimeParams, speed: (_a = options === null || options === void 0 ? void 0 : options.speed) !== null && _a !== void 0 ? _a : runtimeParams.speed };
+        const buffer = effectiveProvider === 'elevenlabs'
+            ? await generateSpeechElevenLabs(ctx, callParams, ttsText, (options === null || options === void 0 ? void 0 : options.voice) || runtimeParams.defaultVoice, cacheManager)
+            : await generateSpeech(ctx, callParams, ttsText, (options === null || options === void 0 ? void 0 : options.voice) || runtimeParams.defaultVoice, cacheManager);
         if (!buffer)
             return '语音生成失败，请检查控制台日志';
-        const audioElem = makeAudioElement(buffer, runtimeParams.audioFormat);
+        // 测试指令与自动语音走同一条 SILK 发送链路，便于现场验证转码效果
+        const audioElem = config.silkEnabled !== false && !isWeixinLikePlatform(session.platform)
+            ? await makeSilkAudioElementSafe(ctx, buffer, runtimeParams.audioFormat, effectiveProvider === 'elevenlabs' ? config.elevenlabsLocalSpeed : undefined, effectiveProvider === 'elevenlabs' ? config.elevenlabsTailPadMs : undefined)
+            : makeAudioElement(buffer, runtimeParams.audioFormat);
         await session.send(audioElem);
         if (displayText)
             await session.send(displayText);
